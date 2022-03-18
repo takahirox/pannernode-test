@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Panner node simple stress test</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <h1>WebAudio Panner node stress test</h1>
+  <div>
+    Panning Model
+    <select id="panningModel">
+      <option value="equalpower">equalpower</option>
+      <option value="HRTF" selected>HRTF</option>
+    </select>
+    <br />
+    Number of Audios(Panners)
+    <select id="audioNumSelect"></select>
+    <br />
+    Move Panners and Listener
+    <input id="movePannersAndListenerCheckbox" type="checkbox" checked>
+    <br />
+    Additional main thread CPU stress
+    <select id="additionalCpuStressSelect">
+      <option value="None" selected>None</option>
+      <option value="Low">Low</option>
+      <option value="High">High</option>
+    </select>
+  </div>
+
+  <br />
+
+  <div>
+    WebAudio AudioContext constructor optional parameters<br />
+    <br />
+    latencyHint
+    <select id="latencyHintSelect">
+      <option value="None" selected>None</option>
+      <option value="balanced">balanced</option>
+      <option value="interactive">interactive</option>
+      <option value="playback">playback</option>
+    </select>
+    <br />
+    sampleRate <input id="sampleRateText" type="text"></input>
+    <br />
+    <div id="errorMessage" style="color: red"></div>
+  </div>
+
+  <br />
+  <button id="playButton">Play</button>
+  <span id="fpsCounter"></span>
+  <br />
+  <br />
+
+  <div id="errorMessage" style="color: red"></div>
+  <div id="useragent" style="overflow-wrap: anywhere"></div>
+
+  <br />
+
+  <div>
+    <a href="https://github.com/takahirox/pannernode-test">GitHub</a>
+  </div>
+
+  <script type="module">
+    const audioFileURL = 'bot-recording.mp3';
+    const maxAudioNum = 100;
+    const panners = [];
+    let audioContext = null;
+
+    const disableElements = () => {
+      document.getElementById('panningModel').disabled = true;
+      document.getElementById('audioNumSelect').disabled = true;
+      document.getElementById('movePannersAndListenerCheckbox').disabled = true;
+      document.getElementById('additionalCpuStressSelect').disabled = true;
+      document.getElementById('latencyHintSelect').disabled = true;
+      document.getElementById('sampleRateText').disabled = true;
+      document.getElementById('playButton').disabled = true;
+    };
+
+    const createAudioElement = () => {
+      const audioElement = document.createElement('audio');
+      audioElement.setAttribute('playsinline', '');
+      audioElement.setAttribute('webkit-playsinline', '');
+      audioElement.loop = true;
+      audioElement.preload = 'auto';
+      audioElement.autoplay = true;
+      audioElement.crossOrigin = 'anonymous';
+      audioElement.src = audioFileURL;
+      audioElement.load(); // This seems to be necessary for iOS Safari
+      return audioElement;
+    };
+
+    const createAudioContext = () => {
+      const options = {};
+
+      const latencyHintSelect = document.getElementById('latencyHintSelect');
+      const sampleRateText = document.getElementById('sampleRateText');
+
+      const latencyHintOption = latencyHintSelect.options[latencyHintSelect.selectedIndex];
+      const sampleRateValue = sampleRateText.value;
+
+      if (latencyHintOption.value !== 'None') { options.latencyHint = latencyHintOption.value; }
+      if (sampleRateValue !== '') { options.sampleRate = parseInt(sampleRateValue); }
+
+      console.log('AudioContext constructor parameters', options);
+
+      const context = new (window.AudioContext || window.webkitAudioContext)(options);
+      sampleRateText.value = context.sampleRate;
+      return context;
+    };
+
+    const initPanners = (context) => {
+      const audioNumSelect = document.getElementById('audioNumSelect');
+      const audioNumOption = audioNumSelect.options[audioNumSelect.selectedIndex];
+      const audioNum = parseInt(audioNumOption.value);
+      const panningModel = document.getElementById('panningModel').value;
+
+      for (let i = 0; i < audioNum; i++) {
+        const audioElement = createAudioElement();
+        audioElement.addEventListener('error', onError);
+        audioElement.currentTime = i;
+        const source = context.createMediaElementSource(audioElement);
+        const panner = context.createPanner();
+        panner.panningModel = panningModel;
+        source.connect(panner);
+        panner.connect(context.destination);
+        panners.push(panner);
+      }
+    };
+
+    const play = () => {
+      disableElements();
+
+      try {
+        audioContext = createAudioContext();
+        initPanners(audioContext);
+        update();
+      } catch (e) {
+        onError(e);
+      }
+    };
+
+    const update = () => {
+      requestAnimationFrame(update);
+      const currentTime = performance.now();
+      countFps(currentTime);
+      makeCpuStress();
+      updateTransforms(currentTime);
+    };
+
+    let frameCount = 0;
+    let elapsedTime = 0.0;
+    let previousTime = performance.now();
+
+    const countFps = (currentTime) => {
+      frameCount++;
+      elapsedTime += currentTime - previousTime;
+      previousTime = currentTime;
+      if (frameCount === 60) {
+        const fps = 1000.0 / (elapsedTime / frameCount);
+        document.getElementById('fpsCounter').innerText = fps.toFixed(2) + ' fps';
+        frameCount = 0;
+        elapsedTime = 0.0;
+      }
+    };
+
+    // TODO: How can we determine the appropriate numbers?
+    const LoopNums = {
+      None: 0,
+      Low: 0x1000000,
+      High: 0x4000000
+    };
+
+    const makeCpuStress = () => {
+      const additionalCpuStressSelect = document.getElementById('additionalCpuStressSelect');
+      const additionalCpuStressOption = additionalCpuStressSelect.options[additionalCpuStressSelect.selectedIndex];
+      const loopNum = LoopNums[additionalCpuStressOption.value];
+      let sum = 0;
+      for (let x = 0; x < loopNum; x++) {
+        sum += 1;
+      }
+      return sum;
+    };
+
+    const updateTransforms = (currentTime) => {
+      if (!document.getElementById('movePannersAndListenerCheckbox').checked) {
+        return;
+      }
+      const endTime = audioContext.currentTime + 0.001;
+      updatePannerTransforms(currentTime, endTime);
+      updateListenerTransform(currentTime, endTime);
+    };
+
+    const updatePannerTransforms = (currentTime, endTime) => {
+      const currentTimeParam = currentTime * 0.0001;
+      for (let i = 0; i < panners.length; i++) {
+        const panner = panners[i];
+        const positionX = Math.cos(currentTimeParam + i * 1.0) * 10.0;
+        const positionY = Math.sin(currentTimeParam + i * 3.0) * 10.0;
+        const positionZ = Math.cos(currentTimeParam + i * 5.0) * 10.0;
+        const orientationX = Math.cos(currentTimeParam + i * 7.0);
+        const orientationY = Math.sin(currentTimeParam + i * 11.0);
+        const orientationZ = Math.cos(currentTimeParam + i * 13.0);
+
+        if (panner.positionX) {
+          panner.positionX.linearRampToValueAtTime(positionX, endTime);
+          panner.positionY.linearRampToValueAtTime(positionY, endTime);
+          panner.positionZ.linearRampToValueAtTime(positionZ, endTime);
+          panner.orientationX.linearRampToValueAtTime(orientationX, endTime);
+          panner.orientationY.linearRampToValueAtTime(orientationY, endTime);
+          panner.orientationZ.linearRampToValueAtTime(orientationZ, endTime);
+        } else {
+          panner.setPosition(positionX, positionY, positionZ);
+          panner.setOrientation(orientationX, orientationY, orientationZ);
+        }
+      }
+    };
+
+    const updateListenerTransform = (currentTime, endTime) => {
+      const listener = audioContext.listener;
+      const currentTimeParam = currentTime * 0.0005;
+
+      const positionX = Math.cos(currentTimeParam + 1.0);
+      const positionY = Math.sin(currentTimeParam + 3.0);
+      const positionZ = Math.cos(currentTimeParam + 5.0);
+      const forwardX = Math.cos(currentTimeParam + 7.0);
+      const forwardY = Math.sin(currentTimeParam + 11.0);
+      const forwardZ = Math.cos(currentTimeParam + 13.0);
+
+      if (listener.positionX) {
+        listener.positionX.linearRampToValueAtTime(positionX, endTime);
+        listener.positionY.linearRampToValueAtTime(positionY, endTime);
+        listener.positionZ.linearRampToValueAtTime(positionZ, endTime);
+        listener.forwardX.linearRampToValueAtTime(forwardX, endTime);
+        listener.forwardY.linearRampToValueAtTime(forwardY, endTime);
+        listener.forwardZ.linearRampToValueAtTime(forwardZ, endTime);
+      } else {
+        listener.setPosition(positionX, positionY, positionZ);
+        listener.setOrientation(forwardX, forwardY, forwardZ, 0.0, 1.0, 0.0);
+      }
+    };
+
+    const initAudioNumSelect = () => {
+      const select = document.getElementById('audioNumSelect');
+      for (let i = 1; i <= maxAudioNum; i++) {
+        const option = document.createElement('option');
+        if (i === 15) {
+          option.selected = true;
+        }
+        option.innerText = i;
+        option.value = i;
+        select.appendChild(option);
+      }
+    };
+
+    const onError = e => {
+      document.getElementById('errorMessage').innerText = e.message;
+      console.error(e);
+    };
+
+    initAudioNumSelect();
+    document.getElementById('playButton').addEventListener('click', play);
+    document.getElementById('useragent').innerText = navigator.userAgent;
+  </script>
+</body>
+</html>
